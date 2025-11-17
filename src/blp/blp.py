@@ -698,26 +698,36 @@ class BlpQuery(BlpSession):
         cid = self.session.sendRequest(request, self.identity, correlation_id, data_queue)
         return cid
 
-    def get_response(self, data_queue: blpapi.EventQueue, timeout: Optional[int] = None) -> Generator:
-        """Yield dictionary representation of blpapi.Messages from a blpapi.EventQueue.
+    def get_response(
+        self,
+        data_queue: blpapi.EventQueue,
+        timeout: int | None = None,
+    ) -> Generator:
+        """Override for the included blp get response generator, adds functionality for blpapi.Event.PARTIAL_RESPONSE
+        type responses where the parser was failing
 
-        Args:
-            data_queue: Queue which contains response
-            timeout: Milliseconds to wait for service before the blpapi.EventQueue returns a blpapi.Event.TIMEOUT
+        Even though it will only be returning one response I have kept it in
+        the generator format of the original
+        module to avoid exessive changes and risk breaking something
 
-        Returns: A generator of messages translated into a dictionary representation
+        If refactoring, need to change get_response to return one complete response and parse(data) to take one response
+        in the parent module
 
         """
+
         if timeout is None:
             timeout = self.timeout
-        while True:
-            event = data_queue.nextEvent(timeout=timeout)
-            event_type = event.eventType()
-            event_type_name = _EVENT_DICT[event_type]
-            if event_type == blpapi.Event.TIMEOUT:
-                raise ConnectionError(f"Unexpected blpapi.Event.TIMEOUT received by {self!r}")
+
+        event = data_queue.nextEvent(timeout=timeout)
+        event_type = event.eventType()
+        event_type_name = _EVENT_DICT[event_type]
+
+        if event_type == blpapi.Event.TIMEOUT:
+            raise ConnectionError(
+                f"Unexpected blpapi.Event.TIMEOUT received by {self!r}"
+            )
+        elif event_type == blpapi.Event.RESPONSE:
             for n, msg in enumerate(event):
-                logger.debug(f"Message {n} in {event_type_name}:{msg}")
                 response = {
                     "eventType": event_type,
                     "eventTypeName": event_type_name,
@@ -725,8 +735,34 @@ class BlpQuery(BlpSession):
                     "message": message_to_dict(msg),
                 }
                 yield response
-            if event_type == blpapi.Event.RESPONSE:
-                return
+            return
+        # Override for when partial responses are returned, causing the parser to malfunction due to incomplete response chunks
+        elif event_type == blpapi.Event.PARTIAL_RESPONSE:
+            #TODO: Clean up PARTIAL_RESPONSE handling
+            accum_message_element = []
+
+            while True:
+                event_type = event.eventType()
+                event_type_name = _EVENT_DICT[event_type]
+
+                for n, msg in enumerate(event):
+                    dict_msg = message_to_dict(msg)
+                    accum_message_element.append(dict_msg["element"])
+
+                if event_type == blpapi.Event.RESPONSE:
+
+                    message = message_to_dict(msg)
+                    message["element"] = "".join(accum_message_element)
+
+                    yield {
+                        "eventType": event_type,
+                        "eventTypeName": event_type_name,
+                        "messageNumber": n,
+                        "message": message,
+                    }
+                    return
+
+                event = data_queue.nextEvent(timeout=timeout)
 
     def cast_columns(self, df: pandas.DataFrame, fields: Iterable) -> pandas.DataFrame:
         res = {}
