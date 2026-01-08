@@ -738,7 +738,7 @@ class BlpQuery(BlpSession):
             return
         # Override for when partial responses are returned, causing the parser to malfunction due to incomplete response chunks
         elif event_type == blpapi.Event.PARTIAL_RESPONSE:
-            #TODO: Clean up PARTIAL_RESPONSE handling
+            # TODO: Clean up PARTIAL_RESPONSE handling
             accum_message_element = []
 
             while True:
